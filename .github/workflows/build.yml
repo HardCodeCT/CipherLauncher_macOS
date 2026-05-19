@@ -6,6 +6,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Force all JS actions (upload-artifact, download-artifact, checkout…)
+# onto Node.js 24 now, ahead of the mandatory June 2nd 2026 cutover.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   build:
     strategy:
@@ -35,7 +40,6 @@ jobs:
       # The cache key includes the runner OS so x86_64 and arm64 stay separate.
       - name: Cache Homebrew curl
         uses: actions/cache@v4
-        id: brew-cache
         with:
           path: |
             ~/Library/Caches/Homebrew/downloads
