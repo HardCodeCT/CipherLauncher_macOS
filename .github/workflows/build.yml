@@ -12,10 +12,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-13
+          - os: macos-15-intel  # last supported Intel/x86_64 image (replaces deprecated macos-13)
             arch: x86_64
             artifact_name: CipherLauncher_x86_64
-          - os: macos-14
+          - os: macos-14        # Apple Silicon arm64
             arch: arm64
             artifact_name: CipherLauncher_arm64
 
@@ -84,7 +84,7 @@ jobs:
   universal:
     name: Build Universal Binary (fat)
     needs: build
-    runs-on: macos-14
+    runs-on: macos-15
 
     steps:
       - name: Download x86_64 artifact
