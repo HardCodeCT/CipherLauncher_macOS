@@ -1,4 +1,4 @@
-name: Build macOS (Fast Universal)
+name: Build macOS
 
 on:
   push:
@@ -8,69 +8,110 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-13
+            arch: x86_64
+            artifact_name: CipherLauncher_x86_64
+          - os: macos-14
+            arch: arm64
+            artifact_name: CipherLauncher_arm64
+
+    runs-on: ${{ matrix.os }}
+
+    # Prevent Homebrew from auto-updating on every brew command —
+    # this is the main reason the arm64 job was taking much longer.
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          brew update
-          brew install curl
+      # Cache Homebrew's curl bottle so repeat runs are near-instant.
+      # The cache key includes the runner OS so x86_64 and arm64 stay separate.
+      - name: Cache Homebrew curl
+        uses: actions/cache@v4
+        id: brew-cache
+        with:
+          path: |
+            ~/Library/Caches/Homebrew/downloads
+            ~/Library/Caches/Homebrew/curl--*
+          key: brew-curl-${{ matrix.os }}-${{ hashFiles('.github/workflows/build.yml') }}
+          restore-keys: |
+            brew-curl-${{ matrix.os }}-
 
-      - name: Build x86_64 + arm64 binaries
+      - name: Install libcurl (Homebrew)
+        run: brew install curl
+
+      - name: Build CipherLauncher (${{ matrix.arch }})
         run: |
           CURL_PREFIX=$(brew --prefix curl)
 
-          # Intel build
           clang++ \
             -std=c++17 \
             -O2 \
             -Wall -Wextra \
-            -arch x86_64 \
+            -Wno-unused-parameter \
+            -arch ${{ matrix.arch }} \
             -mmacosx-version-min=11.0 \
             -I"${CURL_PREFIX}/include" \
             CipherLauncher/cipher_launcher.cpp \
             -L"${CURL_PREFIX}/lib" -lcurl \
             -framework CoreFoundation \
-            -o CipherLauncher_x86_64
+            -rpath "${CURL_PREFIX}/lib" \
+            -o ${{ matrix.artifact_name }}
 
-          # Apple Silicon build
-          clang++ \
-            -std=c++17 \
-            -O2 \
-            -Wall -Wextra \
-            -arch arm64 \
-            -mmacosx-version-min=11.0 \
-            -I"${CURL_PREFIX}/include" \
-            CipherLauncher/cipher_launcher.cpp \
-            -L"${CURL_PREFIX}/lib" -lcurl \
-            -framework CoreFoundation \
-            -o CipherLauncher_arm64
+      - name: Strip binary
+        run: strip ${{ matrix.artifact_name }}
 
-      - name: Create universal binary
+      - name: Verify architecture
+        run: |
+          file ${{ matrix.artifact_name }}
+          echo "--- lipo info ---"
+          lipo -info ${{ matrix.artifact_name }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}
+          retention-days: 30
+
+  universal:
+    name: Build Universal Binary (fat)
+    needs: build
+    runs-on: macos-14
+
+    steps:
+      - name: Download x86_64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: CipherLauncher_x86_64
+          path: artifacts/x86_64
+
+      - name: Download arm64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: CipherLauncher_arm64
+          path: artifacts/arm64
+
+      - name: Create universal binary with lipo
         run: |
           lipo -create \
-            CipherLauncher_x86_64 \
-            CipherLauncher_arm64 \
+            artifacts/x86_64/CipherLauncher_x86_64 \
+            artifacts/arm64/CipherLauncher_arm64 \
             -output CipherLauncher_universal
 
           file CipherLauncher_universal
           lipo -info CipherLauncher_universal
 
-      - name: Strip binaries
-        run: |
-          strip CipherLauncher_x86_64 || true
-          strip CipherLauncher_arm64 || true
-          strip CipherLauncher_universal || true
-
-      - name: Upload artifacts
+      - name: Upload universal artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CipherLauncher-macOS-build
-          path: |
-            CipherLauncher_x86_64
-            CipherLauncher_arm64
-            CipherLauncher_universal
+          name: CipherLauncher_universal
+          path: CipherLauncher_universal
           retention-days: 30
