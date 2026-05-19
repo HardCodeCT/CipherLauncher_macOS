@@ -1,0 +1,111 @@
+name: Build macOS
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:   # allows manual trigger from the Actions tab
+
+# Build two native binaries: one for Intel (x86_64) and one for Apple Silicon (arm64)
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-13          # GitHub-hosted Intel runner (Ventura)
+            arch: x86_64
+            artifact_name: CipherLauncher_x86_64
+          - os: macos-14          # GitHub-hosted Apple Silicon runner (Sonoma)
+            arch: arm64
+            artifact_name: CipherLauncher_arm64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # ── 1. Check out the repository ─────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. Install dependencies ─────────────────────────────────────────────
+      #    Homebrew curl gives us a recent OpenSSL-backed libcurl with proper
+      #    TLS support for GitHub/Python download redirects.
+      - name: Install libcurl (Homebrew)
+        run: |
+          brew update --quiet
+          brew install curl
+
+      # ── 3. Build ─────────────────────────────────────────────────────────────
+      - name: Build CipherLauncher (${{ matrix.arch }})
+        run: |
+          CURL_PREFIX=$(brew --prefix curl)
+
+          clang++ \
+            -std=c++17 \
+            -O2 \
+            -Wall -Wextra \
+            -Wno-unused-parameter \
+            -arch ${{ matrix.arch }} \
+            -mmacosx-version-min=11.0 \
+            -I"${CURL_PREFIX}/include" \
+            CipherLauncher/cipher_launcher.cpp \
+            -L"${CURL_PREFIX}/lib" -lcurl \
+            -framework CoreFoundation \
+            -rpath "${CURL_PREFIX}/lib" \
+            -o ${{ matrix.artifact_name }}
+
+      # ── 4. Strip debug symbols (reduces binary size) ──────────────────────
+      - name: Strip binary
+        run: strip ${{ matrix.artifact_name }}
+
+      # ── 5. Verify the binary is the right arch ────────────────────────────
+      - name: Verify architecture
+        run: |
+          file ${{ matrix.artifact_name }}
+          echo "--- lipo info ---"
+          lipo -info ${{ matrix.artifact_name }}
+
+      # ── 6. Upload as a downloadable artifact ─────────────────────────────
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}
+          retention-days: 30
+
+  # ── Optional: combine into a universal binary ──────────────────────────────
+  universal:
+    name: Build Universal Binary (fat)
+    needs: build
+    runs-on: macos-14   # arm64 runner can run lipo for both archs
+
+    steps:
+      - name: Download x86_64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: CipherLauncher_x86_64
+          path: artifacts/x86_64
+
+      - name: Download arm64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: CipherLauncher_arm64
+          path: artifacts/arm64
+
+      - name: Create universal binary with lipo
+        run: |
+          lipo -create \
+            artifacts/x86_64/CipherLauncher_x86_64 \
+            artifacts/arm64/CipherLauncher_arm64 \
+            -output CipherLauncher_universal
+
+          # Verify
+          file CipherLauncher_universal
+          lipo -info CipherLauncher_universal
+
+      - name: Upload universal artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CipherLauncher_universal
+          path: CipherLauncher_universal
+          retention-days: 30
