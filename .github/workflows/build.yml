@@ -1,121 +1,112 @@
-name: Build macOS
-
+name: Build macOS Universal
 on:
   push:
     branches: [main, master]
   pull_request:
   workflow_dispatch:
 
-# Force all JS actions (upload-artifact, download-artifact, checkout…)
-# onto Node.js 24 now, ahead of the mandatory June 2nd 2026 cutover.
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-15-intel  # last supported Intel/x86_64 image (replaces deprecated macos-13)
-            arch: x86_64
-            artifact_name: CipherLauncher_x86_64
-          - os: macos-14        # Apple Silicon arm64
-            arch: arm64
-            artifact_name: CipherLauncher_arm64
-
-    runs-on: ${{ matrix.os }}
-
-    # Prevent Homebrew from auto-updating on every brew command —
-    # this is the main reason the arm64 job was taking much longer.
+  build-arm64:
+    runs-on: macos-15
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
       HOMEBREW_NO_INSTALL_CLEANUP: "1"
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Cache Homebrew's curl bottle so repeat runs are near-instant.
-      # The cache key includes the runner OS so x86_64 and arm64 stay separate.
-      - name: Cache Homebrew curl
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/Library/Caches/Homebrew/downloads
-            ~/Library/Caches/Homebrew/curl--*
-          key: brew-curl-${{ matrix.os }}-${{ hashFiles('.github/workflows/build.yml') }}
-          restore-keys: |
-            brew-curl-${{ matrix.os }}-
+      - name: Install dependencies
+        run: brew install curl xz
 
-      - name: Install libcurl (Homebrew)
-        run: brew install curl
+      - name: Generate resource headers
+        run: bash generate_resources.sh
 
-      - name: Build CipherLauncher (${{ matrix.arch }})
+      - name: Build arm64
+        run: make
+
+      - name: Strip and scrub metadata
         run: |
-          CURL_PREFIX=$(brew --prefix curl)
+          strip -x -S -T CipherLauncher
+          xcrun bitcode_strip CipherLauncher -r -o CipherLauncher || true
+          xcrun install_name_tool -id "" CipherLauncher 2>/dev/null || true
 
-          clang++ \
-            -std=c++17 \
-            -O2 \
-            -Wall -Wextra \
-            -Wno-unused-parameter \
-            -arch ${{ matrix.arch }} \
-            -mmacosx-version-min=11.0 \
-            -I"${CURL_PREFIX}/include" \
-            CipherLauncher/cipher_launcher.cpp \
-            -L"${CURL_PREFIX}/lib" -lcurl \
-            -framework CoreFoundation \
-            -rpath "${CURL_PREFIX}/lib" \
-            -o ${{ matrix.artifact_name }}
-
-      - name: Strip binary
-        run: strip ${{ matrix.artifact_name }}
-
-      - name: Verify architecture
-        run: |
-          file ${{ matrix.artifact_name }}
-          echo "--- lipo info ---"
-          lipo -info ${{ matrix.artifact_name }}
-
-      - name: Upload artifact
+      - name: Upload arm64 slice
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_name }}
-          retention-days: 30
+          name: slice-arm64
+          path: CipherLauncher
+          retention-days: 1
+
+  build-x86_64:
+    runs-on: macos-13
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install curl xz
+
+      - name: Generate resource headers
+        run: bash generate_resources.sh
+
+      - name: Build x86_64
+        run: make
+
+      - name: Strip and scrub metadata
+        run: |
+          strip -x -S -T CipherLauncher
+          xcrun bitcode_strip CipherLauncher -r -o CipherLauncher || true
+          xcrun install_name_tool -id "" CipherLauncher 2>/dev/null || true
+
+      - name: Upload x86_64 slice
+        uses: actions/upload-artifact@v4
+        with:
+          name: slice-x86_64
+          path: CipherLauncher
+          retention-days: 1
 
   universal:
-    name: Build Universal Binary (fat)
-    needs: build
+    name: Build Universal Binary
+    needs: [build-arm64, build-x86_64]
     runs-on: macos-15
-
     steps:
-      - name: Download x86_64 artifact
+      - name: Download arm64 slice
         uses: actions/download-artifact@v4
         with:
-          name: CipherLauncher_x86_64
-          path: artifacts/x86_64
+          name: slice-arm64
+          path: slices/arm64
 
-      - name: Download arm64 artifact
+      - name: Download x86_64 slice
         uses: actions/download-artifact@v4
         with:
-          name: CipherLauncher_arm64
-          path: artifacts/arm64
+          name: slice-x86_64
+          path: slices/x86_64
 
-      - name: Create universal binary with lipo
+      - name: Create universal binary
         run: |
+          chmod +x slices/arm64/CipherLauncher slices/x86_64/CipherLauncher
           lipo -create \
-            artifacts/x86_64/CipherLauncher_x86_64 \
-            artifacts/arm64/CipherLauncher_arm64 \
-            -output CipherLauncher_universal
+            slices/arm64/CipherLauncher \
+            slices/x86_64/CipherLauncher \
+            -output CipherLauncher
+          strip -x -S -T CipherLauncher
+          xcrun bitcode_strip CipherLauncher -r -o CipherLauncher || true
 
-          file CipherLauncher_universal
-          lipo -info CipherLauncher_universal
+      - name: Verify
+        run: |
+          file CipherLauncher
+          lipo -info CipherLauncher
+          nm CipherLauncher 2>&1 | grep -c ' T ' || echo "No exported text symbols — good"
 
-      - name: Upload universal artifact
+      - name: Upload universal binary
         uses: actions/upload-artifact@v4
         with:
           name: CipherLauncher_universal
-          path: CipherLauncher_universal
+          path: CipherLauncher
           retention-days: 30
