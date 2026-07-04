@@ -9,7 +9,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  build-arm64:
+  build-universal:
     runs-on: macos-15
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
@@ -18,90 +18,49 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install arm64 dependencies (native Homebrew)
         run: brew install curl xz
+
+      - name: Ensure Rosetta 2 is present
+        run: softwareupdate --install-rosetta --agree-to-license || true
+
+      - name: Install x86_64 Homebrew (for Intel-slice libs only)
+        run: |
+          if [ ! -x /usr/local/bin/brew ]; then
+            arch -x86_64 /bin/bash -c \
+              "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          fi
+
+      - name: Install x86_64 dependencies
+        run: arch -x86_64 /usr/local/bin/brew install curl xz
 
       - name: Generate resource headers
         run: bash generate_resources.sh
 
-      - name: Build arm64
-        run: make
-
-      - name: Strip and scrub metadata
+      - name: Build arm64 slice
         run: |
+          make clean
+          make ARCH=arm64 DEPLOY_TARGET=11.0 HOMEBREW_PREFIX=/opt/homebrew
+          mv CipherLauncher CipherLauncher-arm64
+
+      - name: Build x86_64 slice
+        run: |
+          make clean
+          make ARCH=x86_64 DEPLOY_TARGET=10.15 HOMEBREW_PREFIX=/usr/local
+          mv CipherLauncher CipherLauncher-x86_64
+
+      - name: Fuse into universal binary
+        run: |
+          lipo -create CipherLauncher-arm64 CipherLauncher-x86_64 -output CipherLauncher
           strip -x -S -T CipherLauncher
           xcrun bitcode_strip CipherLauncher -r -o CipherLauncher || true
           xcrun install_name_tool -id "" CipherLauncher 2>/dev/null || true
-
-      - name: Upload arm64 slice
-        uses: actions/upload-artifact@v4
-        with:
-          name: slice-arm64
-          path: CipherLauncher
-          retention-days: 1
-
-  build-x86_64:
-    runs-on: macos-13
-    env:
-      HOMEBREW_NO_AUTO_UPDATE: "1"
-      HOMEBREW_NO_INSTALL_CLEANUP: "1"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: brew install curl xz
-
-      - name: Generate resource headers
-        run: bash generate_resources.sh
-
-      - name: Build x86_64
-        run: make
-
-      - name: Strip and scrub metadata
-        run: |
-          strip -x -S -T CipherLauncher
-          xcrun bitcode_strip CipherLauncher -r -o CipherLauncher || true
-          xcrun install_name_tool -id "" CipherLauncher 2>/dev/null || true
-
-      - name: Upload x86_64 slice
-        uses: actions/upload-artifact@v4
-        with:
-          name: slice-x86_64
-          path: CipherLauncher
-          retention-days: 1
-
-  universal:
-    name: Build Universal Binary
-    needs: [build-arm64, build-x86_64]
-    runs-on: macos-15
-    steps:
-      - name: Download arm64 slice
-        uses: actions/download-artifact@v4
-        with:
-          name: slice-arm64
-          path: slices/arm64
-
-      - name: Download x86_64 slice
-        uses: actions/download-artifact@v4
-        with:
-          name: slice-x86_64
-          path: slices/x86_64
-
-      - name: Create universal binary
-        run: |
-          chmod +x slices/arm64/CipherLauncher slices/x86_64/CipherLauncher
-          lipo -create \
-            slices/arm64/CipherLauncher \
-            slices/x86_64/CipherLauncher \
-            -output CipherLauncher
-          strip -x -S -T CipherLauncher
-          xcrun bitcode_strip CipherLauncher -r -o CipherLauncher || true
 
       - name: Verify
         run: |
           file CipherLauncher
           lipo -info CipherLauncher
+          otool -l CipherLauncher | grep -A3 LC_VERSION_MIN || true
           nm CipherLauncher 2>&1 | grep -c ' T ' || echo "No exported text symbols — good"
 
       - name: Upload universal binary
