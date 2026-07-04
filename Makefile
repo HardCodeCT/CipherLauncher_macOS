@@ -1,3 +1,13 @@
+ARCH ?= $(shell uname -m)
+
+ifeq ($(ARCH),x86_64)
+    DEPLOY_TARGET  ?= 10.15
+    HOMEBREW_PREFIX ?= /usr/local
+else
+    DEPLOY_TARGET  ?= 11.0
+    HOMEBREW_PREFIX ?= /opt/homebrew
+endif
+
 CXX = clang++
 CXXFLAGS = -std=c++17 -O3 -flto \
            -fvisibility=hidden \
@@ -5,11 +15,11 @@ CXXFLAGS = -std=c++17 -O3 -flto \
            -fdata-sections \
            -fstack-protector-strong \
            -Wall -Wextra -Wno-unused-parameter \
-           -mmacosx-version-min=11.0
+           -arch $(ARCH) \
+           -mmacosx-version-min=$(DEPLOY_TARGET)
 
 SRC = cipher_launcher.cpp
 
-HOMEBREW_PREFIX := $(shell brew --prefix 2>/dev/null || echo /usr/local)
 CURL_INC = $(HOMEBREW_PREFIX)/opt/curl/include
 CURL_LIB = $(HOMEBREW_PREFIX)/opt/curl/lib
 LZMA_INC = $(HOMEBREW_PREFIX)/opt/xz/include
@@ -29,8 +39,8 @@ $(OUT): $(SRC) res_fairy_stockfish.h res_nnue_xz.h
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SRC) $(LDFLAGS) -o $(OUT)
 	strip -x -S -T $(OUT)
 	@echo ""
-	@echo "  Built: $(OUT)"
+	@echo "  Built: $(OUT)  (arch=$(ARCH), min=$(DEPLOY_TARGET), prefix=$(HOMEBREW_PREFIX))"
 	@file $(OUT)
 
 clean:
-	rm -f $(OUT) res_*.h
+	rm -f $(OUT) CipherLauncher-arm64 CipherLauncher-x86_64 res_*.h
