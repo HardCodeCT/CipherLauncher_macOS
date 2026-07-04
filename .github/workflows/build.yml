@@ -35,17 +35,17 @@ jobs:
         run: arch -x86_64 /usr/local/bin/brew install curl xz
 
       - name: Generate resource headers
-        run: bash generate_resources.sh
+        run: |
+          sed -i '' 's/\r$//' generate_resources.sh
+          bash generate_resources.sh
 
       - name: Build arm64 slice
         run: |
-          make clean
           make ARCH=arm64 DEPLOY_TARGET=11.0 HOMEBREW_PREFIX=/opt/homebrew
           mv CipherLauncher CipherLauncher-arm64
 
       - name: Build x86_64 slice
         run: |
-          make clean
           make ARCH=x86_64 DEPLOY_TARGET=10.15 HOMEBREW_PREFIX=/usr/local
           mv CipherLauncher CipherLauncher-x86_64
 
