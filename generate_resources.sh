@@ -7,6 +7,7 @@ mkdir -p "$OUT_DIR"
 
 if [ -f assets/fairy-stockfish ]; then
     xxd -i assets/fairy-stockfish > "$OUT_DIR/res_fairy_stockfish.h"
+    sed -i '' 's/assets_fairy_stockfish/res_fairy_stockfish/g' "$OUT_DIR/res_fairy_stockfish.h"
     echo "Generated res_fairy_stockfish.h"
 else
     echo "ERROR: assets/fairy-stockfish not found"
@@ -15,6 +16,7 @@ fi
 
 if [ -f assets/nn-46832cfbead3.nnue.xz ]; then
     xxd -i assets/nn-46832cfbead3.nnue.xz > "$OUT_DIR/res_nnue_xz.h"
+    sed -i '' 's/assets_nn_46832cfbead3_nnue_xz/res_nn_46832cfbead3_nnue_xz/g' "$OUT_DIR/res_nnue_xz.h"
     echo "Generated res_nnue_xz.h"
 else
     echo "ERROR: assets/nn-46832cfbead3.nnue.xz not found"
